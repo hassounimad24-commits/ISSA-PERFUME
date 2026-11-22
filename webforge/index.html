@@ -2,6 +2,14 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
+    <!-- WebForge owner setup:
+    Register a Web app in the central Firebase project, enable Google Auth
+    and add the deployed WebForge hostname to Authorized domains.
+    Create the default Firestore database and apply the Firestore rules
+    shown in the setup instructions under My Projects.
+    Replace {} below with the Web App config as JSON. Do not use an Admin SDK key.
+    -->
+    <script id="webforge-cloud-config" type="application/json">{}</script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebForge | منشئ صفحات المواقع بالعربي</title>
     <meta name="description" content="صمّم صفحة لمشروعك، عاينها على الموبايل وصدّرها بصيغة HTML.">
@@ -56,6 +64,89 @@
             <p class="text-slate-400 text-lg">بلّش بقالب أو صفحة فاضية، رتّب أقسامك، وعاين صفحتك على الموبايل قبل ما تشاركها.</p>
         </div>
 
+        <section id="projects" class="studio-panel glass mb-7" aria-labelledby="projectsHeading">
+            <h2 id="projectsHeading" class="text-xl font-bold">مشاريعي</h2>
+            <p id="projectStatus" role="status" class="text-sm text-slate-300">عم يتم التحقّق من إعدادات النشر…</p>
+            <div class="studio-row">
+                <button type="button" id="projectSignIn" hidden>دخول بحساب Google</button>
+                <button type="button" id="projectSignOut" hidden>تسجيل الخروج</button>
+            </div>
+            <div id="projectControls" hidden>
+                <div class="studio-row mb-3">
+                    <label>المشاريع المحفوظة <select id="projectList"></select></label>
+                    <button type="button" id="projectOpen">فتح</button>
+                    <button type="button" id="projectNew">مشروع فاضي</button>
+                    <button type="button" id="projectSave">حفظ المسودّة</button>
+                </div>
+                <div class="studio-row">
+                    <label>اسم رابط الموقع <input id="projectSlug" dir="ltr" maxlength="48" placeholder="my-shop"></label>
+                    <button type="button" id="projectPublish">نشر الموقع</button>
+                    <a id="projectLink" class="text-indigo-300 underline" target="_blank" rel="noopener noreferrer" hidden>فتح الموقع المنشور ↗</a>
+                </div>
+                <p class="text-sm text-slate-300">حفظ المسودّة ما بيغيّر الموقع المنشور. اسم الرابط بيتثبّت وقت أول نشر.</p>
+            </div>
+
+            <details id="projectSetup" hidden>
+                <summary>إعداد النشر لصاحب WebForge</summary>
+                <ol>
+                  <li>سجّل تطبيق Web بمشروع Firebase المركزي، فعّل تسجيل الدخول عبر Google، وضيف نطاق Vercel ضمن Authorized domains.</li>
+                  <li>أنشئ Cloud Firestore. بمشروع مركزي جديد، انشر القواعد أدناه. إذا عندك قواعد قائمة، ادمج قواعد WebForge معها.</li>
+                  <li>بملف index.html، حطّ إعدادات تطبيق Web بصيغة JSON داخل webforge-cloud-config وبعدين أعد الرفع.</li>
+                </ol>
+                <pre dir="ltr"><code>rules_version = &#x27;2&#x27;;
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function owner(uid) { return signedIn() &amp;&amp; request.auth.uid == uid; }
+    function validSlug(slug) {
+      return slug is string &amp;&amp; slug.size() &gt;= 3 &amp;&amp; slug.size() &lt;= 48
+        &amp;&amp; slug.matches(&#x27;^[a-z0-9]+(-[a-z0-9]+)*$&#x27;);
+    }
+    function validProject(d) {
+      return d.keys().hasAll([&#x27;draft&#x27;,&#x27;slug&#x27;,&#x27;revision&#x27;,&#x27;updatedAt&#x27;])
+        &amp;&amp; d.keys().hasOnly([&#x27;draft&#x27;,&#x27;slug&#x27;,&#x27;revision&#x27;,&#x27;updatedAt&#x27;])
+        &amp;&amp; d.draft is map &amp;&amp; d.revision is int &amp;&amp; d.revision &gt; 0
+        &amp;&amp; (d.slug == null || validSlug(d.slug))
+        &amp;&amp; d.updatedAt == request.time;
+    }
+    function publishedTo(uid, id, slug) {
+      let path = /databases/$(database)/documents/webforgePublished/$(slug);
+      return existsAfter(path) &amp;&amp; getAfter(path).data.uid == uid
+        &amp;&amp; getAfter(path).data.projectId == id;
+    }
+    match /webforgeUsers/{uid}/projects/{id} {
+      allow get, list: if owner(uid);
+      allow create: if owner(uid) &amp;&amp; validProject(request.resource.data)
+        &amp;&amp; request.resource.data.revision == 1
+        &amp;&amp; (request.resource.data.slug == null || publishedTo(uid, id, request.resource.data.slug));
+      allow update: if owner(uid) &amp;&amp; validProject(request.resource.data)
+        &amp;&amp; request.resource.data.revision == resource.data.revision + 1
+        &amp;&amp; (request.resource.data.slug == resource.data.slug
+          || (resource.data.slug == null &amp;&amp; validSlug(request.resource.data.slug)
+            &amp;&amp; publishedTo(uid, id, request.resource.data.slug)));
+    }
+    match /webforgePublished/{slug} {
+      function validPublication(d) {
+        let path = /databases/$(database)/documents/webforgeUsers/$(d.uid)/projects/$(d.projectId);
+        return d.keys().hasAll([&#x27;uid&#x27;,&#x27;projectId&#x27;,&#x27;site&#x27;,&#x27;updatedAt&#x27;])
+          &amp;&amp; d.keys().hasOnly([&#x27;uid&#x27;,&#x27;projectId&#x27;,&#x27;site&#x27;,&#x27;updatedAt&#x27;])
+          &amp;&amp; owner(d.uid) &amp;&amp; d.projectId is string &amp;&amp; validSlug(slug)
+          &amp;&amp; d.site is map &amp;&amp; d.updatedAt == request.time
+          &amp;&amp; existsAfter(path) &amp;&amp; getAfter(path).data.slug == slug
+          &amp;&amp; getAfter(path).data.draft == d.site;
+      }
+      allow get: if true;
+      allow create: if validPublication(request.resource.data);
+      allow update: if owner(resource.data.uid)
+        &amp;&amp; request.resource.data.uid == resource.data.uid
+        &amp;&amp; request.resource.data.projectId == resource.data.projectId
+        &amp;&amp; validPublication(request.resource.data);
+    }
+  }
+}
+</code></pre>
+            </details>
+        </section>
         <p id="linkError" hidden role="alert" class="mb-4 text-rose-300">رابط المشاركة غير صالح.</p>
         <div class="grid lg:grid-cols-12 gap-8 items-start">
             <!-- Form Controls -->
@@ -167,7 +258,7 @@
                     <p id="trialStatus" role="status" class="text-sm text-slate-300"></p>
                     <button type="button" id="startTrial" onclick="startTrial()" class="w-full py-3 rounded-xl bg-indigo-600 font-bold">ابدأ تجربة 3 أيام</button>
                     <button id="shareAction" disabled onclick="publishSite()" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 font-bold text-lg shadow-lg shadow-indigo-600/30 transition transform active:scale-95">
-                        إنشاء رابط مشاركة
+                        إنشاء رابط لنسخة من الصفحة
                     </button>
                     <button id="downloadAction" disabled onclick="downloadHTML()" class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm transition">
                         تنزيل الصفحة (HTML)
@@ -222,6 +313,10 @@
 </section>
     </main>
 
+    <section id="publicSiteStatus" class="px-6 py-10 text-center" hidden>
+        <p id="publicSiteMessage" role="status">عم ينفتح الموقع…</p>
+        <p><a href="?" class="text-indigo-300 underline">الرجوع إلى WebForge</a></p>
+    </section>
     <!-- Published Site Mode (When opened via shared link) -->
     <div id="published-view" class="hidden fixed inset-0 z-50 bg-white">
         <iframe id="fullSiteFrame" sandbox="allow-popups allow-popups-to-escape-sandbox" title="الموقع المشترك" class="w-full h-full border-0"></iframe>
@@ -872,18 +967,244 @@
             render();
         }
 
+        const webforgeRuntime = (() => {
+            let pending;
+            return () => {
+                if (!pending) pending = (async () => {
+                    const block = document.getElementById('webforge-cloud-config');
+                    const config = JSON.parse(block.textContent);
+                    if (!['apiKey', 'authDomain', 'projectId', 'appId'].every(key => typeof config?.[key] === 'string' && config[key])) {
+                        throw new Error('النشر الثابت بانتظار إعداد Firebase المركزي لـWebForge.');
+                    }
+                    const appSDK = await import('https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js');
+                    const [authSDK, dbSDK] = await Promise.all([
+                        import('https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js'),
+                        import('https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js')
+                    ]);
+                    const app = appSDK.initializeApp(config, 'webforge-platform');
+                    return { authSDK, dbSDK, auth: authSDK.getAuth(app), db: dbSDK.getFirestore(app) };
+                })().catch(error => { pending = undefined; throw error; });
+                return pending;
+            };
+        })();
+
+        function publicSiteURL(slug) {
+            const url = new URL(location.pathname, location.origin);
+            url.searchParams.set('s', slug);
+            return url.href;
+        }
+
+        function validSlug(slug) {
+            return slug.length >= 3 && slug.length <= 48 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
+        }
+
+        function showPublished(cfg) {
+            document.getElementById('fullSiteFrame').srcdoc = generateSiteHTML(cfg);
+            document.getElementById('builder-view').classList.add('hidden');
+            document.querySelector('nav').classList.add('hidden');
+            document.getElementById('published-view').classList.remove('hidden');
+            document.title = cfg.name;
+        }
+
+        async function openPublishedProject(slug) {
+            const notice = document.getElementById('publicSiteStatus');
+            notice.hidden = false;
+            document.getElementById('builder-view').classList.add('hidden');
+            try {
+                if (!validSlug(slug)) throw new Error('رابط الموقع غير صالح.');
+                const { db, dbSDK } = await webforgeRuntime();
+                const snap = await dbSDK.getDocFromServer(dbSDK.doc(db, 'webforgePublished', slug));
+                const cfg = snap.exists() && normalizeConfig(snap.data().site);
+                if (!cfg) throw new Error('ما في موقع منشور على هالرابط.');
+                showPublished(cfg);
+                notice.hidden = true;
+            } catch (error) {
+                document.getElementById('publicSiteMessage').textContent = error.code
+                    ? 'تعذّر تحميل الموقع. جرّب تحدّث الصفحة.'
+                    : error.message;
+            }
+        }
+
+        async function setupProjects() {
+            const $ = id => document.getElementById(id);
+            const status = $('projectStatus');
+            const list = $('projectList');
+            const slugInput = $('projectSlug');
+            const link = $('projectLink');
+            const signIn = $('projectSignIn');
+            const signOut = $('projectSignOut');
+            const controls = $('projectControls');
+            const buttons = ['projectOpen', 'projectNew', 'projectSave', 'projectPublish'].map($);
+            const setStatus = value => { status.textContent = value; };
+            let runtime;
+            let user;
+            let selected;
+            let savedDraft;
+            let busy = false;
+            let projects = [];
+
+            function render() {
+                signIn.hidden = !runtime || Boolean(user);
+                signOut.hidden = controls.hidden = !user;
+                signIn.disabled = signOut.disabled = list.disabled = busy;
+                buttons.forEach(button => { button.disabled = busy; });
+                $('projectOpen').disabled = busy || !list.value;
+                slugInput.disabled = busy || Boolean(selected?.slug);
+                if (selected?.slug) slugInput.value = selected.slug;
+                $('projectPublish').textContent = selected?.slug ? 'نشر التحديث' : 'نشر الموقع';
+                link.hidden = !selected?.slug;
+                if (selected?.slug) link.href = publicSiteURL(selected.slug);
+                else link.removeAttribute('href');
+            }
+
+            async function run(operation) {
+                if (busy) return;
+                busy = true;
+                render();
+                try { await operation(); }
+                catch (error) {
+                    setStatus(error.code ? `تعذّر تنفيذ العملية (${error.code}).` : error.message);
+                } finally {
+                    busy = false;
+                    render();
+                }
+            }
+
+            function collection(uid) {
+                return runtime.dbSDK.collection(runtime.db, 'webforgeUsers', uid, 'projects');
+            }
+
+            function renderList() {
+                const choice = list.value;
+                list.replaceChildren(new Option('اختار مشروع', ''));
+                projects.forEach(project => list.add(new Option(project.draft?.name || 'مشروع', project.id)));
+                list.value = selected?.id || choice;
+            }
+
+            function unsaved() {
+                return savedDraft !== JSON.stringify(getSiteConfig());
+            }
+
+            function replaceEditor(draft) {
+                applyDraft(draft);
+                renderBlocks();
+                saveDraft();
+            }
+
+            async function updateProject(publish) {
+                const uid = user.uid;
+                const { dbSDK, db } = runtime;
+                const draft = getSiteConfig();
+                const active = selected;
+                const slug = publish ? active?.slug || slugInput.value.trim().toLowerCase() : active?.slug || null;
+                if (publish && !validSlug(slug)) {
+                    throw new Error('اسم الرابط لازم يكون من 3 إلى 48 حرف إنجليزي صغير أو رقم، والشرطة بين الكلمات.');
+                }
+                const ref = active ? dbSDK.doc(collection(uid), active.id) : dbSDK.doc(collection(uid));
+                const published = publish ? dbSDK.doc(db, 'webforgePublished', slug) : null;
+                setStatus(publish ? 'عم يتم النشر…' : 'عم يتم حفظ المسودّة…');
+                const project = await dbSDK.runTransaction(db, async tx => {
+                    const previous = active && await tx.get(ref);
+                    if (active && (!previous.exists() || previous.data().revision !== active.revision)) {
+                        throw new Error('هالمشروع تغيّر من جهاز تاني. افتح آخر نسخة من القائمة قبل الحفظ.');
+                    }
+                    if (published) {
+                        const existing = await tx.get(published);
+                        if (existing.exists() && (existing.data().uid !== uid || existing.data().projectId !== ref.id)) {
+                            throw new Error('اسم الرابط مأخوذ. اختار اسم تاني.');
+                        }
+                    }
+                    const revision = (active?.revision || 0) + 1;
+                    tx.set(ref, { draft, slug, revision, updatedAt: dbSDK.serverTimestamp() });
+                    if (published) {
+                        tx.set(published, { uid, projectId: ref.id, site: draft, updatedAt: dbSDK.serverTimestamp() });
+                    }
+                    return { id: ref.id, draft, slug, revision };
+                });
+                selected = project;
+                savedDraft = JSON.stringify(draft);
+                projects = [project, ...projects.filter(item => item.id !== project.id)];
+                renderList();
+                setStatus(publish ? 'تم النشر. فيك تفتح الرابط الثابت وتشاركه.' : 'انحفظت المسودّة.');
+            }
+
+            signIn.addEventListener('click', () => run(() => runtime.authSDK.signInWithPopup(runtime.auth, new runtime.authSDK.GoogleAuthProvider())));
+            signOut.addEventListener('click', () => run(async () => {
+                if (unsaved() && !confirm('في تعديلات غير محفوظة بالسحابة. بدك تسجّل خروج؟')) return;
+                await runtime.authSDK.signOut(runtime.auth);
+            }));
+            list.addEventListener('change', render);
+            $('projectOpen').addEventListener('click', () => run(async () => {
+                if (!list.value || (unsaved() && !confirm('فتح المشروع رح يستبدل التعديلات الحالية بالمحرّر. بدك تكمّل؟'))) return;
+                const snap = await runtime.dbSDK.getDocFromServer(runtime.dbSDK.doc(collection(user.uid), list.value));
+                const project = snap.exists() && snap.data();
+                const draft = project && normalizeConfig(project.draft);
+                if (!draft) throw new Error('المشروع ما عاد موجود أو المسودّة غير صالحة.');
+                replaceEditor(draft);
+                selected = { ...project, id: snap.id };
+                savedDraft = JSON.stringify(getSiteConfig());
+                slugInput.value = project.slug || '';
+                setStatus('المشروع مفتوح للتعديل.');
+            }));
+            $('projectNew').addEventListener('click', () => {
+                if (unsaved() && !confirm('إنشاء مشروع جديد رح يستبدل المسودّة المفتوحة بالمحرّر. بدك تكمّل؟')) return;
+                selected = undefined;
+                list.value = slugInput.value = '';
+                replaceEditor(normalizeConfig({ template: 'blank' }));
+                savedDraft = JSON.stringify(getSiteConfig());
+                setStatus('مشروع جديد. عدّله واحفظه لمّا تخلص.');
+                render();
+            });
+            $('projectSave').addEventListener('click', () => run(() => updateProject(false)));
+            $('projectPublish').addEventListener('click', () => run(() => updateProject(true)));
+
+            try {
+                runtime = await webforgeRuntime();
+                runtime.authSDK.onAuthStateChanged(runtime.auth, async account => {
+                    user = account;
+                    selected = undefined;
+                    projects = [];
+                    savedDraft = undefined;
+                    list.value = slugInput.value = '';
+                    renderList();
+                    render();
+                    if (!account) {
+                        setStatus('سجّل دخول لتحفظ مشاريعك وتنشر على رابط ثابت.');
+                        return;
+                    }
+                    setStatus('عم يتم تحميل مشاريعك…');
+                    try {
+                        const snapshot = await runtime.dbSDK.getDocs(runtime.dbSDK.query(
+                            collection(account.uid), runtime.dbSDK.orderBy('updatedAt', 'desc'), runtime.dbSDK.limit(100)
+                        ));
+                        if (user?.uid !== account.uid) return;
+                        projects = [...projects, ...snapshot.docs.filter(doc => !projects.some(project => project.id === doc.id))
+                            .map(doc => ({ id: doc.id, ...doc.data() }))];
+                        renderList();
+                        if (selected) return;
+                        setStatus(projects.length ? 'اختار مشروع من القائمة أو احفظ العمل الحالي كمشروع جديد.' : 'احفظ العمل الحالي كمشروع جديد أو ابدأ بصفحة فاضية.');
+                    } catch (error) {
+                        if (user?.uid === account.uid) setStatus(`تعذّر تحميل المشاريع (${error.code || 'network'}).`);
+                    } finally { render(); }
+                });
+            } catch (error) {
+                $('projectSetup').hidden = false;
+                setStatus(error.message);
+            }
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
-            const siteParam = new URLSearchParams(location.search).get('site');
+            const params = new URLSearchParams(location.search);
+            if (params.has('s')) {
+                openPublishedProject(params.get('s'));
+                return;
+            }
+            const siteParam = params.get('site');
             if (siteParam) {
                 try {
                     // Older shared links inserted base64 without escaping plus signs.
                     const cfg = normalizeConfig(decodeData(siteParam.replace(/ /g, '+')));
-                    const html = generateSiteHTML(cfg);
-                    document.getElementById('fullSiteFrame').srcdoc = html;
-                    document.getElementById('builder-view').classList.add('hidden');
-                    document.querySelector('nav').classList.add('hidden');
-                    document.getElementById('published-view').classList.remove('hidden');
-                    document.title = cfg.name;
+                    showPublished(cfg);
                     return;
                 } catch {
                     document.getElementById('linkError').hidden = false;
@@ -892,6 +1213,7 @@
             restoreDraft();
             setupEditor();
             setupFirebase();
+            setupProjects();
             Object.keys(fields).filter(id => id !== 'siteTemplate').forEach(id => {
                 document.getElementById(id).addEventListener('input', saveDraft);
             });
