@@ -222,9 +222,9 @@
                   <li>سجّل تطبيق Web بمشروع Firebase المركزي، فعّل طرق الدخول Email/Password وGoogle وFacebook، وضيف نطاق Vercel ضمن Authorized domains.</li>
                   <li>لـFacebook، سجّل تطبيق Meta وأضف OAuth redirect URI اللي بيظهر بإعدادات Firebase إلى Valid OAuth Redirect URIs في Meta.</li>
                   <li>أنشئ Cloud Firestore. بمشروع مركزي جديد، انشر القواعد أدناه. إذا عندك قواعد قائمة، ادمج قواعد WebForge معها.</li>
-                  <li>بملف index.html، حطّ إعدادات تطبيق Web بصيغة JSON داخل webforge-cloud-config وبعدين أعد الرفع.</li>
+                  <li>من Project settings → Your apps انسخ إعدادات تطبيق Web، والصقها بالخانة أدناه. نزّل index.html الجاهز وأعد رفعه على نفس مشروع Vercel.</li>
                 </ol>
-                <pre dir="ltr"><code>rules_version = &#x27;2&#x27;;
+                <pre dir="ltr"><code id="ownerFirestoreRules">rules_version = &#x27;2&#x27;;
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
@@ -276,6 +276,14 @@ service cloud.firestore {
   }
 }
 </code></pre>
+                <button type="button" id="ownerRulesDownload">تنزيل قواعد Firestore</button>
+                <form id="ownerConfigForm" class="space-y-2">
+                    <label for="ownerFirebaseConfig">إعدادات تطبيق Firebase Web</label>
+                    <textarea id="ownerFirebaseConfig" rows="5" maxlength="6000" dir="ltr" placeholder="const firebaseConfig = { ... };" required></textarea>
+                    <button type="submit">تنزيل index.html مهيّأ لـFirebase</button>
+                </form>
+                <p id="ownerConfigMessage" role="status"></p>
+
             </details>
         </section>
         <p id="linkError" hidden role="alert" class="mb-4 text-rose-300">رابط المشاركة غير صالح.</p>
@@ -1467,6 +1475,59 @@ service cloud.firestore {
             }
         }
 
+        function setupOwnerConfig() {
+            const block = document.getElementById('webforge-cloud-config');
+            if (block.textContent.trim() !== '{}') return;
+            const unconfiguredHTML = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+            const form = document.getElementById('ownerConfigForm');
+            const feedback = document.getElementById('ownerConfigMessage');
+            const allowedKeys = ['apiKey', 'authDomain', 'projectId', 'appId', 'storageBucket', 'messagingSenderId', 'measurementId', 'databaseURL'];
+
+            function download(name, value, type) {
+                const url = URL.createObjectURL(new Blob([value], { type }));
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = name;
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }
+
+            function readWebConfig(value) {
+                try { return JSON.parse(value); } catch {}
+                const object = value.match(/(?:\bfirebaseConfig\s*=\s*)?({[^{}]+})/)?.[1];
+                if (!object) return null;
+                try {
+                    return JSON.parse(object.replace(/([{,]\s*)([A-Za-z][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3')
+                        .replace(/,\s*}/g, '}'));
+                } catch { return null; }
+            }
+
+            document.getElementById('ownerRulesDownload').addEventListener('click', () => {
+                download('firestore.rules', document.getElementById('ownerFirestoreRules').textContent, 'text/plain;charset=utf-8');
+            });
+            form.addEventListener('submit', event => {
+                event.preventDefault();
+                const config = readWebConfig(document.getElementById('ownerFirebaseConfig').value.trim());
+                const has = key => typeof config?.[key] === 'string' && config[key].trim();
+                if (!allowedKeys.slice(0, 4).every(has)) {
+                    feedback.textContent = 'الصق firebaseConfig من إعدادات تطبيق Web. لازم يضم apiKey وauthDomain وprojectId وappId.';
+                    return;
+                }
+                const safeConfig = Object.fromEntries(allowedKeys.filter(has).map(key => [key, config[key].trim()]));
+                const json = JSON.stringify(safeConfig, null, 2).replace(/</g, '\\u003c');
+                const html = unconfiguredHTML.replace(
+                    /(<script id="webforge-cloud-config" type="application\/json">)[^<]*(<\/script>)/,
+                    (_, opening, closing) => opening + json + closing
+                );
+                if (html === unconfiguredHTML) {
+                    feedback.textContent = 'تعذّر تجهيز الملف. راجع طريقة الإعداد اليدوي.';
+                    return;
+                }
+                download('index.html', html, 'text/html;charset=utf-8');
+                feedback.textContent = 'تم تجهيز الملف. ارفع نسخة index.html الجديدة على نفس مشروع Vercel.';
+            });
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             const params = new URLSearchParams(location.search);
             if (params.has('s')) {
@@ -1484,6 +1545,7 @@ service cloud.firestore {
                     document.getElementById('linkError').hidden = false;
                 }
             }
+            setupOwnerConfig();
             freshDraft = getSiteConfig();
             restoreDraft();
             setupEditor();
